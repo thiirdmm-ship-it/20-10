@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#100d24" />
+  <title>Bó hoa 3D lung linh</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+    body {
+      color: #fff5fb;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+      background:
+        radial-gradient(ellipse at 52% 38%, #46305e 0%, #231936 34%, #110e25 70%, #090916 100%);
+    }
+    #scene { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; }
+    #scene canvas { display: block; width: 100%; height: 100%; }
+    .glow-overlay {
+      pointer-events: none; position: fixed; inset: 0;
+      background: radial-gradient(ellipse at 50% 43%, transparent 26%, rgba(6,5,19,.37) 95%);
+    }
+    .heading {
+      position: fixed; z-index: 2; top: clamp(20px, 5vh, 50px);
+      left: 20px; right: 20px; text-align: center;
+      pointer-events: none; text-shadow: 0 3px 25px rgba(0,0,0,.4);
+    }
+    .eyebrow { letter-spacing: .33em; color: #f7cce8; font-size: 10px; font-weight: 600; }
+    h1 { font: normal clamp(30px, 4.8vw, 58px)/1.12 Georgia, 'Times New Roman', serif; margin: 11px 0 9px; }
+    .heading p { margin: 0; color: #f5dfee; font-size: clamp(12px, 1.4vw, 15px); opacity: .85; }
+    .controls {
+      position: fixed; z-index: 3; bottom: max(22px, env(safe-area-inset-bottom));
+      left: 50%; transform: translateX(-50%); display: flex;
+      gap: 9px; padding: 8px; border-radius: 999px;
+      border: 1px solid rgba(255,255,255,.16); background: rgba(25,17,45,.48);
+      box-shadow: 0 8px 35px rgba(0,0,0,.17); backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+    }
+    button {
+      border: 0; border-radius: 999px; padding: 10px 16px;
+      background: rgba(255,255,255,.07); color: #fff3f9;
+      font-size: 12px; font-weight: 600; white-space: nowrap;
+      cursor: pointer; transition: background .2s, transform .2s;
+    }
+    button:hover { background: rgba(255,255,255,.18); }
+    button:active { transform: scale(.96); }
+    button[aria-pressed="true"] { background: rgba(246,168,207,.23); }
+    .hint {
+      position: fixed; z-index: 2; bottom: 91px; width: 100%; text-align: center;
+      color: rgba(250,225,246,.7); font-size: 11px; letter-spacing: .025em;
+      pointer-events: none;
+    }
+    .error { position: fixed; inset: 0; display: none; place-items: center; z-index: 10;
+      padding: 30px; text-align: center; background: #110e25; }
+    @media (max-width: 560px) {
+      .heading { top: 28px; } .eyebrow { font-size: 9px; }
+      .controls { width: calc(100% - 24px); max-width: 365px; justify-content: space-between; }
+      button { padding: 10px 12px; font-size: 11px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      button { transition: none; }
+    }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="scene" aria-label="Mô hình bó hoa ba chiều tương tác"></div>
+  <div class="glow-overlay"></div>
+  <header class="heading">
+    <div class="eyebrow">A LITTLE MAGIC FOR YOU</div>
+    <h1>Bó hoa của những vì sao</h1>
+    <p>Một chút dịu dàng, một trời lấp lánh ✨</p>
+  </header>
+  <div class="hint">Kéo để xoay bó hoa · Cuộn / chụm hai ngón để phóng to</div>
+  <nav class="controls" aria-label="Điều khiển hiệu ứng">
+    <button id="rotateBtn" aria-pressed="true">↻ Tự xoay</button>
+    <button id="petalsBtn" aria-pressed="true">🌸 Cánh hoa</button>
+    <button id="sparklesBtn" aria-pressed="true">✦ Lấp lánh</button>
+  </nav>
+  <div class="error" id="error">Không tải được thư viện 3D. Hãy kết nối Internet và mở lại trang.</div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    // ====== CÓ THỂ TÙY CHỈNH NHANH TẠI ĐÂY ======
+    const CONFIG = {
+      flowerColors: ['#ff86b4', '#eab1fb', '#ffd0dc', '#f49dbf', '#fff0df', '#bd9bf8'],
+      fallingPetalCount: 54,
+      sparkleCount: 240,
+      autoRotateSpeed: 0.55
+    };
+
+    const container = document.getElementById('scene');
+    const scene = new THREE.Scene();
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.6;
+    container.appendChild(renderer.domElement);
+
+    const camera = new THREE.PerspectiveCamera(43, window.innerWidth / window.innerHeight, 0.1, 90);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.055;
+    controls.enablePan = false;
+    controls.minDistance = 6;
+    controls.maxDistance = 20;
+    controls.minPolarAngle = Math.PI * 0.29;
+    controls.maxPolarAngle = Math.PI * 0.73;
+    controls.target.set(0, 0.1, 0);
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = CONFIG.autoRotateSpeed;
+
+    function setCameraForScreen() {
+      const aspect = window.innerWidth / window.innerHeight;
+      const distance = aspect < 0.7 ? 14.2 : aspect < 1.1 ? 11.9 : 10.8;
+      camera.position.set(0, 1.25 + distance * .07, distance);
+      camera.aspect = aspect;
+      camera.updateProjectionMatrix();
+    }
+    setCameraForScreen();
+
+    // Ánh sáng mềm nhiều màu, có chuyển động nhẹ.
+    scene.add(new THREE.HemisphereLight(0xffeaf7, 0x392442, 2.25));
+    const keyLight = new THREE.DirectionalLight(0xfff3e8, 3.1);
+    keyLight.position.set(-3, 7, 7); scene.add(keyLight);
+    const pinkLight = new THREE.PointLight(0xff5fae, 38, 14, 2);
+    pinkLight.position.set(3, 2, 4); scene.add(pinkLight);
+    const blueLight = new THREE.PointLight(0x9279ff, 26, 12, 2);
+    blueLight.position.set(-3, 1, -1); scene.add(blueLight);
+
+    const bouquet = new THREE.Group();
+    scene.add(bouquet);
+
+    // Cánh hoa có độ cong thật, không phải ảnh 2D dán lên mặt phẳng.
+    function petalGeometry(width, height, curve = 0.22) {
+      const vertices = [], uvs = [], indices = [];
+      const cols = 12, rows = 14;
+      for (let i = 0; i <= rows; i++) {
+        const t = i / rows;
+        const petalWidth = width * (0.16 + 0.84 * Math.sin(Math.PI * (0.025 + .84 * t))) * (.42 + .58 * t);
+        for (let j = 0; j <= cols; j++) {
+          const s = j / cols * 2 - 1;
+          const x = s * petalWidth;
+          const y = t * height + height * .055 * Math.pow(Math.abs(s), 2) * Math.pow(t, 6);
+          const z = curve * t * t + .08 * Math.sin(Math.PI * t) * (1 - s*s)
+                  - .11 * Math.pow(Math.abs(s), 2) * Math.pow(t, 3);
+          vertices.push(x, y, z); uvs.push(j / cols, t);
+        }
+      }
+      for (let i = 0; i < rows; i++) for (let j = 0; j < cols; j++) {
+        const a = i * (cols + 1) + j, b = a + cols + 1;
+        indices.push(a, b, a+1, b, b+1, a+1);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+      g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      g.setIndex(indices); g.computeVertexNormals();
+      return g;
+    }
+
+    const petalTemplates = [
+      petalGeometry(.19, .48, .11), petalGeometry(.29, .65, .17),
+      petalGeometry(.38, .82, .23), petalGeometry(.45, .90, .29)
+    ];
+    const petalRings = [
+      { n: 5, r: .03, y: .07, tilt: .08 },
+      { n: 6, r: .12, y: .015, tilt: .28 },
+      { n: 8, r: .22, y: -.055, tilt: .46 },
+      { n: 10, r: .30, y: -.13, tilt: .63 }
+    ];
+
+    function rose(color, seed) {
+      const group = new THREE.Group();
+      const base = new THREE.Color(color);
+      const heart = new THREE.Mesh(new THREE.SphereGeometry(.15, 12, 9),
+        new THREE.MeshStandardMaterial({ color: base.clone().multiplyScalar(.76), roughness: .56 }));
+      heart.position.y = .29; group.add(heart);
+      petalRings.forEach((ring, layer) => {
+        const tint = base.clone().lerp(new THREE.Color('#fff1ef'), layer * .075);
+        const material = new THREE.MeshPhysicalMaterial({
+          color: tint, side: THREE.DoubleSide, roughness: .48,
+          metalness: 0, clearcoat: .13, sheen: .8, sheenColor: tint
+        });
+        for (let i = 0; i < ring.n; i++) {
+          const a = 2 * Math.PI * (i / ring.n + layer * .091 + seed * .013);
+          const swivel = new THREE.Group();
+          swivel.rotation.y = a;
+          swivel.position.set(0, ring.y + Math.sin(i * 5.4 + seed) * .018, ring.r);
+          const p = new THREE.Mesh(petalTemplates[layer], material);
+          p.rotation.set(ring.tilt + Math.sin(i * 2.1 + seed) * .055, 0,
+                         Math.sin(i * 4.15 + seed * 2) * .075);
+          swivel.add(p); group.add(swivel);
+        }
+      });
+      const sepals = new THREE.Mesh(new THREE.ConeGeometry(.26, .32, 6),
+        new THREE.MeshStandardMaterial({ color: 0x466d49, roughness: .9 }));
+      sepals.position.y = -.25; sepals.rotation.z = Math.PI;
+      group.add(sepals);
+      return group;
+    }
+
+    function leafGeometry() {
+      const v = [], idx = [], segments = 10;
+      for (let i=0; i<=segments; i++) {
+        const t = i / segments;
+        const w = .2 * Math.pow(Math.sin(Math.PI * t), .83);
+        v.push(-w, .75*t, .15*Math.sin(Math.PI*t));
+        v.push(0, .75*t, .18*Math.sin(Math.PI*t));
+        v.push(w, .75*t, .15*Math.sin(Math.PI*t));
+      }
+      for (let i=0; i<segments; i++) {
+        const a=i*3, b=(i+1)*3;
+        idx.push(a,b,a+1, a+1,b,b+1, a+1,b+1,a+2, a+2,b+1,b+2);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(v,3));
+      g.setIndex(idx); g.computeVertexNormals(); return g;
+    }
+    const leafShape = leafGeometry();
+    const leafMats = [0x648d5d, 0x84ad77, 0x466f53].map(color =>
+      new THREE.MeshStandardMaterial({ color, side: THREE.DoubleSide, roughness: .84 }));
+    const stalkMaterial = new THREE.MeshStandardMaterial({ color: 0x587d58, roughness: .88 });
+
+    // Các bông hoa cao thấp, trước sau tạo thành cụm tự nhiên.
+    const flowers = [
+      [0, 2.19, -.05, .77], [-1.00, 1.94, .11, .73], [1.02, 1.92, .10, .73],
+      [-1.72, 1.25, -.12, .67], [1.73, 1.24, -.14, .68],
+      [-.53, 1.31, .84, .70], [.54, 1.30, .91, .70],
+      [-1.24, .53, .72, .68], [1.24, .50, .74, .68], [0, .48, 1.14, .75],
+      [-.47, 2.63, -.67, .66], [.56, 2.58, -.63, .66],
+      [-1.34, 2.26, -.88, .62], [1.36, 2.23, -.90, .62],
+      [0, 1.60, -.81, .72]
+    ];
+    const up = new THREE.Vector3(0, 1, 0);
+    flowers.forEach(([x,y,z,scale], i) => {
+      const start = new THREE.Vector3(x*.05, -2.73, z*.04);
+      const end = new THREE.Vector3(x, y-.27, z);
+      const curve = new THREE.CatmullRomCurve3([
+        start, new THREE.Vector3(x*.26, -1.22, z*.22),
+        new THREE.Vector3(x*.79, .18 + y*.19, z*.77), end
+      ]);
+      bouquet.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 27, .036, 6, false), stalkMaterial));
+      const blossom = rose(CONFIG.flowerColors[i % CONFIG.flowerColors.length], i);
+      blossom.position.set(x,y,z);
+      blossom.scale.setScalar(scale);
+      blossom.rotation.z = -.08*x;
+      blossom.rotation.x = z > .7 ? -.18 : -.035;
+      bouquet.add(blossom);
+      for (let j = 0; j < 2; j++) {
+        const t = .60 + j*.11;
+        const leaf = new THREE.Mesh(leafShape, leafMats[(i+j)%leafMats.length]);
+        leaf.position.copy(curve.getPoint(t));
+        const side = (i+j)%2 ? 1 : -1;
+        const direction = new THREE.Vector3(side * (0.75 + (i%3)*.12), .62, .3 + j*.25).normalize();
+        leaf.quaternion.setFromUnitVectors(up, direction);
+        leaf.rotation.y += i*.43;
+        leaf.scale.setScalar(.65 + (i%4)*.1);
+        bouquet.add(leaf);
+      }
+    });
+
+    // Giấy gói dạng nón, các vạt giấy xòe ở miệng bó hoa.
+    const paper = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.38, .31, 2.45, 12, 1, true),
+      new THREE.MeshStandardMaterial({ color: 0xf3dfe6, roughness: .94,
+        side: THREE.DoubleSide, metalness: .02 })
+    );
+    paper.position.y = -1.75;
+    paper.rotation.y = Math.PI/12;
+    bouquet.add(paper);
+    const paperColors = [0xffe6ef, 0xe8d6f0, 0xf9e9e4, 0xdbc9e7];
+    for(let i=0; i<12; i++) {
+      const a = i*2*Math.PI/12, d = Math.PI/12;
+      const at = (r,h,angle) => [r*Math.sin(angle), h, r*Math.cos(angle)];
+      const vertices = [
+        ...at(.84,-1.4,a), ...at(1.4,-.49,a-d), ...at(1.69,.03,a),
+        ...at(.84,-1.4,a), ...at(1.69,.03,a), ...at(1.4,-.49,a+d)
+      ];
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices,3));
+      geometry.computeVertexNormals();
+      bouquet.add(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+        color: paperColors[i%paperColors.length], roughness: .95,
+        side: THREE.DoubleSide, transparent: true, opacity: .96
+      })));
+    }
+    const bottom = new THREE.Mesh(new THREE.SphereGeometry(.31, 16, 8),
+      new THREE.MeshStandardMaterial({color:0xebcadb, roughness: .9}));
+    bottom.position.y=-2.94; bottom.scale.set(1,.38,1); bouquet.add(bottom);
+
+    // Ruy băng satin thắt nơ: tạo dải theo đường cong, không dùng ảnh.
+    const ribbonMaterial = new THREE.MeshPhysicalMaterial({
+      color: 0xf58ebb, side: THREE.DoubleSide, roughness: .27, metalness: .13, clearcoat: .6
+    });
+    function ribbonStrip(points, width, material = ribbonMaterial) {
+      const vertices = [], indices = [];
+      points.forEach((p,i) => {
+        const prev = points[Math.max(0,i-1)], next = points[Math.min(points.length-1,i+1)];
+        const dx = next.x-prev.x, dy=next.y-prev.y;
+        const len = Math.hypot(dx,dy)||1, nx=-dy/len*width/2, ny=dx/len*width/2;
+        vertices.push(p.x+nx,p.y+ny,p.z, p.x-nx,p.y-ny,p.z);
+        if(i < points.length-1) { const a=2*i; indices.push(a,a+1,a+2,a+1,a+3,a+2); }
+      });
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(vertices,3));
+      g.setIndex(indices); g.computeVertexNormals();
+      bouquet.add(new THREE.Mesh(g,material));
+    }
+    for(const side of [-1,1]) {
+      const loop=[];
+      for(let i=0;i<=60;i++) {
+        const t=2*Math.PI*i/60;
+        loop.push(new THREE.Vector3(side*(.4-.4*Math.cos(t)), -1.83+.28*Math.sin(t),
+          1.055+.065*Math.sin(2*t)));
+      }
+      ribbonStrip(loop,.19);
+      const tail = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(0,-1.85,1.06),
+        new THREE.Vector3(side*.15,-2.09,1.09),
+        new THREE.Vector3(side*.42,-2.42,.92),
+        new THREE.Vector3(side*.34,-2.72,.77)
+      ]);
+      ribbonStrip(tail.getPoints(22), .19);
+    }
+    const knot = new THREE.Mesh(new THREE.SphereGeometry(.18, 18, 12), ribbonMaterial);
+    knot.position.set(0,-1.85,1.095); knot.scale.set(1, .74, .44); bouquet.add(knot);
+
+    // Texture ánh sáng tự tạo bằng canvas, không cần ảnh tải từ mạng.
+    function makeGlowTexture(star = false) {
+      const c = document.createElement('canvas'); c.width=c.height=128;
+      const ctx=c.getContext('2d');
+      const gradient=ctx.createRadialGradient(64,64,0,64,64,64);
+      gradient.addColorStop(0,'rgba(255,255,255,1)');
+      gradient.addColorStop(.14,'rgba(255,251,245,.91)');
+      gradient.addColorStop(.38,'rgba(255,208,244,.29)');
+      gradient.addColorStop(1,'rgba(255,220,246,0)');
+      ctx.fillStyle=gradient; ctx.fillRect(0,0,128,128);
+      if (star) {
+        ctx.strokeStyle='rgba(255,255,255,.84)'; ctx.lineCap='round';
+        ctx.lineWidth=2;
+        ctx.beginPath();ctx.moveTo(64,10);ctx.lineTo(64,118);
+        ctx.moveTo(10,64);ctx.lineTo(118,64);ctx.stroke();
+      }
+      return new THREE.CanvasTexture(c);
+    }
+    const glowTexture=makeGlowTexture();
+    const starTexture=makeGlowTexture(true);
+    const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: glowTexture, color: 0xdfa3ff, transparent:true,
+      blending:THREE.AdditiveBlending, opacity:.28, depthWrite:false
+    }));
+    halo.position.set(0,.2,-3.5); halo.scale.set(9.6,9.6,1); scene.add(halo);
+
+    const dustPositions=[];
+    for(let i=0;i<CONFIG.sparkleCount;i++) {
+      dustPositions.push((Math.random()-.5)*13, (Math.random()-.5)*10, (Math.random()-.5)*9-1.3);
+    }
+    const dustGeo=new THREE.BufferGeometry();
+    dustGeo.setAttribute('position',new THREE.Float32BufferAttribute(dustPositions,3));
+    const dustMat=new THREE.PointsMaterial({map:glowTexture,color:0xffdbf6,size:.20,
+      transparent:true,opacity:.76,blending:THREE.AdditiveBlending,
+      depthWrite:false,sizeAttenuation:true});
+    const dust=new THREE.Points(dustGeo,dustMat); scene.add(dust);
+
+    const twinkles=[];
+    for(let i=0;i<25;i++) {
+      const s=new THREE.Sprite(new THREE.SpriteMaterial({
+        map:starTexture,color:i%3===0?0xffe9a8:i%3===1?0xffb4e5:0xd9d0ff,
+        transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,opacity:.6
+      }));
+      s.position.set((Math.random()-.5)*6.3, (Math.random()-.5)*6.5+.2, (Math.random()-.5)*3+1);
+      scene.add(s);
+      twinkles.push({mesh:s, phase:Math.random()*Math.PI*2, size:.25+Math.random()*.48});
+    }
+
+    // Cánh hoa bay rơi, xoay ba chiều và tự sinh lại sau khi ra khỏi màn hình.
+    const falling=[];
+    const floatGeo=petalGeometry(.19,.37,.10);
+    const floatMats=CONFIG.flowerColors.map(color=> new THREE.MeshBasicMaterial({
+      color, side:THREE.DoubleSide, transparent:true, opacity:.88, depthWrite:false
+    }));
+    function resetFalling(p,initial=false) {
+      p.position.set((Math.random()-.5)*9, initial ? Math.random()*10-4.5 : 5.2+Math.random()*2,
+        (Math.random()-.5)*6+1);
+      p.rotation.set(Math.random()*6.28,Math.random()*6.28,Math.random()*6.28);
+      p.userData.speed=.42+Math.random()*.83;
+      p.userData.swing=.5+Math.random()*1.3;
+      p.userData.phase=Math.random()*Math.PI*2;
+      p.userData.spin=.35+Math.random()*1.1;
+    }
+    for(let i=0;i<CONFIG.fallingPetalCount;i++) {
+      const m=new THREE.Mesh(floatGeo,floatMats[i%floatMats.length]);
+      const s=.58+Math.random()*.95;
+      m.scale.setScalar(s); resetFalling(m,true); scene.add(m); falling.push(m);
+    }
+
+    let petalsOn=true, sparklesOn=true;
+    function toggleButton(id,on,callback) {
+      const button=document.getElementById(id);
+      button.setAttribute('aria-pressed',String(on));
+      button.addEventListener('click',()=> {
+        on=!on; button.setAttribute('aria-pressed',String(on)); callback(on);
+      });
+    }
+    toggleButton('rotateBtn',true,enabled=>{controls.autoRotate=enabled;});
+    toggleButton('petalsBtn',true,enabled=>{
+      petalsOn=enabled; falling.forEach(p=>p.visible=enabled);
+    });
+    toggleButton('sparklesBtn',true,enabled=>{
+      sparklesOn=enabled; dust.visible=enabled; halo.visible=enabled;
+      twinkles.forEach(s=>s.mesh.visible=enabled);
+    });
+
+    const reducedMotion=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if(reducedMotion) controls.autoRotate=false;
+    const clock=new THREE.Clock();
+    let elapsed=0;
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt=Math.min(clock.getDelta(),.05); elapsed+=dt;
+      bouquet.rotation.z=Math.sin(elapsed*.48)*.017;
+      bouquet.rotation.x=Math.sin(elapsed*.33)*.009;
+      if(petalsOn&&!reducedMotion) falling.forEach(p=>{
+        const data=p.userData;
+        p.position.y-=data.speed*dt;
+        p.position.x+=Math.sin(elapsed*data.swing+data.phase)*dt*.28;
+        p.position.z+=Math.cos(elapsed*.8+data.phase)*dt*.12;
+        p.rotation.x+=data.spin*dt*.5;
+        p.rotation.y+=data.spin*dt*.72;
+        p.rotation.z+=data.spin*dt*.37;
+        if(p.position.y < -5) resetFalling(p);
+      });
+      if(sparklesOn) {
+        dust.rotation.y=elapsed*.012;
+        dustMat.opacity=.65+.14*Math.sin(elapsed*1.3);
+        twinkles.forEach(s=>{
+          const pulse=.54+.46*Math.sin(elapsed*(1.5+s.size)+s.phase);
+          s.mesh.scale.setScalar(s.size*(.56+.65*pulse));
+          s.mesh.material.opacity=.15+.73*pulse;
+        });
+        pinkLight.position.x=3+Math.sin(elapsed*.8)*.85;
+        blueLight.intensity=23+6*Math.sin(elapsed*.7);
+      }
+      controls.update(); renderer.render(scene,camera);
+    }
+    animate();
+    window.addEventListener('resize',()=>{
+      setCameraForScreen(); renderer.setSize(window.innerWidth,window.innerHeight);
+    });
+  </script>
+</body>
+</html>
